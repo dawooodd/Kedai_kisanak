@@ -34,10 +34,10 @@
     <title>Kedai Kisanak — Point of Sale</title>
 
     <!-- Favicon -->
-    <link rel="icon" type="image/jpeg" href="gambar/logo_kisanak.jpg">
+    <link rel="icon" type="image/jpeg" href="./gambar/logo_kisanak.jpg">
 
     <!-- Stylesheet Utama -->
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="./css/style.css">
 
     <!-- CDN: SweetAlert2 CSS -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
@@ -49,7 +49,7 @@
          ══════════════════════════════════════════════════════ -->
     <header class="header">
         <div class="header-brand">
-            <img src="gambar/logo_kisanak.jpg" alt="Logo Kedai Kisanak" class="logo">
+            <img src="./gambar/logo_kisanak.jpg" alt="Logo Kedai Kisanak" class="logo">
             <div class="header-ip" id="header-ip">
                 <span class="ip-label">Terminal IP</span>
                 <span class="ip-value" id="ip-value">Memuat...</span>
@@ -181,14 +181,11 @@
     <div id="receipt-container"></div>
 
     <!-- ══════════════════════════════════════════════════════
-         SCRIPTS — Urutan: DB → App (SecurityUtils) → Payment
-         Semua event listener dipasang di JS (Zero Inline Script)
+         SCRIPTS — External CDN Libraries & Modular ES6 Entry Point
          ══════════════════════════════════════════════════════ -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-    <script src="js/db.js"></script>
-    <script src="js/app.js"></script>
-    <script src="js/payment.js"></script>
+    <script type="module" src="./js/main.js"></script>
 
 </body>
 </html>
