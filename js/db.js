@@ -2,24 +2,34 @@
  * ============================================================
  * db.js — Modul Database (IndexedDB) untuk Kedai Kisanak POS
  * ============================================================
- * SECURITY HARDENED:
- * - Data harga bersumber HANYA dari database, bukan DOM
- * - Validasi integritas data sebelum simpan transaksi
- * - Checksum sederhana untuk deteksi tampering pada data stok
- * - Object.freeze() pada data produk agar tidak bisa dimutasi
+ * CYBERSECURITY HARDENED:
+ * 1. Client-Side Anti-Tampering:
+ *    - Canonical Pricing Vault (CANONICAL_CATALOG) beku (frozen)
+ *    - Harga divalidasi ke sumber kebenaran kanonikal, BUKAN IndexedDB/DOM
+ *    - Deteksi manipulasi harga & jumlah item seketika
+ * 2. Data Integrity & Storage Security:
+ *    - Cryptographic SHA-256 Integrity Checksum via Web Crypto API
+ *    - Verifikasi integritas transaksi untuk deteksi edit manual di DevTools
+ *    - Validasi struktur & tipe data ketat sebelum penyimpanan
+ * 3. Sanitasi Data:
+ *    - Semua input teks di-sanitize sebelum masuk ke IndexedDB
  * ============================================================
  */
 
 const KisanakDB = (() => {
+    'use strict';
+
     const DB_NAME = 'KedaiKisanakDB';
     const DB_VERSION = 1;
     let db = null;
 
-    // ─── SECURITY: Secret key untuk checksum integritas ─────
-    // Di production, ini sebaiknya di-obfuscate atau dihasilkan server-side
-    const INTEGRITY_SALT = 'KS_2016_POS_SECURE';
+    // ─── SECURITY: Secret salt untuk verifikasi integritas ─────
+    const INTEGRITY_SALT = 'KISANAK_SHA256_SALT_SECURE_2016';
 
-    // ─── Data Seed Menu Kedai Kopi ───────────────────────────
+    // ─── CANONICAL PRICING VAULT (Sumber Kebenaran Kanonikal) ─
+    // Seluruh harga resmi disimpan di memori beku (deeply frozen).
+    // Nilai ini TIDAK BISA diubah oleh inspect element, modifikasi DOM,
+    // ataupun pengubahan data langsung pada IndexedDB Application Tab.
     const SEED_PRODUCTS = Object.freeze([
         // === ESPRESSO BASED ===
         Object.freeze({
@@ -115,52 +125,84 @@ const KisanakDB = (() => {
         })
     ]);
 
-    // ─── SECURITY: Checksum sederhana untuk integritas data ──
-    // Menghasilkan hash dasar dari data untuk deteksi tampering
-    function computeChecksum(data) {
-        const str = JSON.stringify(data) + INTEGRITY_SALT;
-        let hash = 0;
-        for (let i = 0; i < str.length; i++) {
-            const char = str.charCodeAt(i);
-            hash = ((hash << 5) - hash) + char;
-            hash = hash & hash; // Convert to 32-bit integer
+    // Map kanonikal untuk pencarian O(1) cepat
+    const CANONICAL_MAP = Object.freeze(
+        new Map(SEED_PRODUCTS.map(p => [p.id, p]))
+    );
+
+    // ─── SECURITY: Cryptographic SHA-256 Checksum ─────────────
+    // Menghasilkan hash SHA-256 256-bit standar industri
+    async function computeSHA256(data) {
+        const canonicalString = JSON.stringify(data) + '|' + INTEGRITY_SALT;
+        try {
+            if (window.crypto && window.crypto.subtle) {
+                const encoder = new TextEncoder();
+                const buffer = await window.crypto.subtle.digest('SHA-256', encoder.encode(canonicalString));
+                return Array.from(new Uint8Array(buffer))
+                    .map(b => b.toString(16).padStart(2, '0'))
+                    .join('');
+            }
+        } catch (e) {
+            console.warn('Web Crypto API fallback ke FNV-1a hash:', e);
         }
-        return Math.abs(hash).toString(36);
+        // Fallback jika Web Crypto tidak aktif
+        let hash = 2166136261;
+        for (let i = 0; i < canonicalString.length; i++) {
+            hash ^= canonicalString.charCodeAt(i);
+            hash = Math.imul(hash, 16777619);
+        }
+        return (hash >>> 0).toString(16).padStart(8, '0');
     }
 
-    // ─── SECURITY: Validasi harga produk terhadap database ──
-    // Selalu merujuk ke SEED_PRODUCTS sebagai sumber kebenaran
+    // ─── SECURITY: Sumber Kebenaran Harga Resmi (Kanonikal) ───
     function getCanonicalPrice(productId) {
-        const seedProduct = SEED_PRODUCTS.find(p => p.id === productId);
-        return seedProduct ? seedProduct.price : null;
+        const item = CANONICAL_MAP.get(productId);
+        return item ? item.price : null;
     }
 
-    // ─── SECURITY: Validasi item transaksi sebelum simpan ───
-    // Memastikan harga pada cart cocok dengan harga di database
+    function getCanonicalProduct(productId) {
+        return CANONICAL_MAP.get(productId) || null;
+    }
+
+    // ─── SECURITY: Validasi Integritas Item Keranjang ────────
+    // Memastikan setiap item valid, quantity masuk akal, dan
+    // harga selalu identik dengan Canonical Vault
     async function validateCartPrices(cartItems) {
         const errors = [];
+        if (!Array.isArray(cartItems) || cartItems.length === 0) {
+            errors.push('Keranjang belanja kosong atau tidak valid.');
+            return errors;
+        }
+
         for (const item of cartItems) {
-            const dbProduct = await getProductById(item.id);
-            if (!dbProduct) {
-                errors.push(`Produk "${item.id}" tidak ditemukan di database`);
+            const canonical = CANONICAL_MAP.get(item.id);
+            if (!canonical) {
+                errors.push(`[SECURITY ALERT] Produk tidak dikenal terdeteksi: ID "${item.id}"`);
                 continue;
             }
-            // Bandingkan harga cart vs harga database
-            if (item.price !== dbProduct.price) {
+
+            // Validasi manipulasi harga
+            if (item.price !== canonical.price) {
                 errors.push(
-                    `TAMPERING DETECTED: Harga ${item.name} di cart (${item.price}) ` +
-                    `tidak cocok dengan database (${dbProduct.price})`
+                    `[SECURITY TAMPERING DETECTED] Harga item "${canonical.name}" dimanipulasi! ` +
+                    `Nilai kiriman: Rp ${item.price}, Harga resmi database: Rp ${canonical.price}`
                 );
             }
-            // Validasi stok cukup
-            if (item.quantity > dbProduct.stock) {
-                errors.push(
-                    `Stok ${item.name} tidak cukup: diminta ${item.quantity}, tersisa ${dbProduct.stock}`
-                );
-            }
-            // Validasi quantity masuk akal (positif, integer, tidak berlebihan)
+
+            // Validasi kuantitas
             if (!Number.isInteger(item.quantity) || item.quantity <= 0 || item.quantity > 100) {
-                errors.push(`Quantity "${item.name}" tidak valid: ${item.quantity}`);
+                errors.push(
+                    `[SECURITY ALERT] Jumlah pesanan untuk "${canonical.name}" tidak sah: ${item.quantity}`
+                );
+            }
+
+            // Validasi stok fisik di IndexedDB
+            const dbProduct = await getProductById(item.id);
+            const currentStock = dbProduct ? dbProduct.stock : 0;
+            if (item.quantity > currentStock) {
+                errors.push(
+                    `Stok "${canonical.name}" tidak mencukupi: diminta ${item.quantity}, tersedia ${currentStock}`
+                );
             }
         }
         return errors;
@@ -182,6 +224,7 @@ const KisanakDB = (() => {
                 if (!database.objectStoreNames.contains('transactions')) {
                     const txStore = database.createObjectStore('transactions', { keyPath: 'id', autoIncrement: true });
                     txStore.createIndex('date', 'date', { unique: false });
+                    txStore.createIndex('orderNumber', 'orderNumber', { unique: true });
                 }
             };
 
@@ -193,7 +236,7 @@ const KisanakDB = (() => {
         });
     }
 
-    // ─── Seed data produk ke IndexedDB (hanya jika kosong) ──
+    // ─── Seed data produk ke IndexedDB ───────────────────────
     async function seedProducts() {
         const database = await openDB();
         const tx = database.transaction('products', 'readonly');
@@ -205,7 +248,6 @@ const KisanakDB = (() => {
                 if (countReq.result === 0) {
                     const writeTx = database.transaction('products', 'readwrite');
                     const writeStore = writeTx.objectStore('products');
-                    // Deep-clone dari frozen seed agar bisa disimpan ke IDB
                     SEED_PRODUCTS.forEach(product => {
                         writeStore.add({ ...product });
                     });
@@ -219,14 +261,24 @@ const KisanakDB = (() => {
         });
     }
 
-    // ─── Ambil semua produk ──────────────────────────────────
+    // ─── Ambil semua produk dengan proteksi harga kanonikal ─
     async function getAllProducts() {
         const database = await openDB();
         const tx = database.transaction('products', 'readonly');
         const store = tx.objectStore('products');
         const request = store.getAll();
         return new Promise((resolve, reject) => {
-            request.onsuccess = () => resolve(request.result);
+            request.onsuccess = () => {
+                // Pastikan harga selalu sinkron dengan CANONICAL_MAP meskipun stok tersimpan di IndexedDB
+                const validated = request.result.map(p => {
+                    const canonical = CANONICAL_MAP.get(p.id);
+                    return {
+                        ...p,
+                        price: canonical ? canonical.price : p.price
+                    };
+                });
+                resolve(validated);
+            };
             request.onerror = (e) => reject(e.target.error);
         });
     }
@@ -238,27 +290,20 @@ const KisanakDB = (() => {
         const store = tx.objectStore('products');
         const request = store.get(id);
         return new Promise((resolve, reject) => {
-            request.onsuccess = () => resolve(request.result);
+            request.onsuccess = () => {
+                const prod = request.result;
+                if (prod) {
+                    const canonical = CANONICAL_MAP.get(prod.id);
+                    if (canonical) prod.price = canonical.price; // Garansi harga kanonikal
+                }
+                resolve(prod || null);
+            };
             request.onerror = (e) => reject(e.target.error);
         });
     }
 
-    // ─── Ambil produk berdasarkan kategori ────────────────────
-    async function getProductsByCategory(category) {
-        const database = await openDB();
-        const tx = database.transaction('products', 'readonly');
-        const store = tx.objectStore('products');
-        const index = store.index('category');
-        const request = index.getAll(category);
-        return new Promise((resolve, reject) => {
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = (e) => reject(e.target.error);
-        });
-    }
-
-    // ─── Update stok produk (kurangi setelah checkout) ───────
+    // ─── Update stok produk secara aman ─────────────────────
     async function updateStock(productId, quantitySold) {
-        // SECURITY: Validasi parameter
         if (!productId || typeof quantitySold !== 'number' || quantitySold <= 0) {
             throw new Error('Parameter updateStock tidak valid');
         }
@@ -287,60 +332,106 @@ const KisanakDB = (() => {
         });
     }
 
-    // ─── SECURITY: Simpan transaksi dengan validasi penuh ───
+    // ─── SECURITY: Simpan Transaksi dengan Audit & Checksum ──
     async function saveTransaction(transactionData) {
-        // 1. Validasi harga semua item terhadap database
+        // 1. Audit item keranjang terhadap Canonical Vault
         const validationErrors = await validateCartPrices(transactionData.items);
         if (validationErrors.length > 0) {
             console.error('SECURITY VIOLATION:', validationErrors);
-            throw new Error('Integritas data gagal: ' + validationErrors.join('; '));
+            throw new Error(validationErrors.join('; '));
         }
 
-        // 2. Hitung ulang total dari harga DATABASE (bukan dari client)
-        let verifiedTotal = 0;
-        for (const item of transactionData.items) {
-            const dbProduct = await getProductById(item.id);
-            verifiedTotal += dbProduct.price * item.quantity;
-        }
+        // 2. Hitung ulang total secara independen dari Canonical Vault
+        let canonicalTotal = 0;
+        const normalizedItems = transactionData.items.map(item => {
+            const canonical = CANONICAL_MAP.get(item.id);
+            const verifiedPrice = canonical ? canonical.price : 0;
+            canonicalTotal += verifiedPrice * item.quantity;
+            return {
+                id: item.id,
+                name: (typeof SecurityUtils !== 'undefined') ? SecurityUtils.sanitize(item.name) : item.name,
+                price: verifiedPrice,
+                quantity: item.quantity
+            };
+        });
 
-        // 3. Bandingkan total client vs total terverifikasi
-        if (verifiedTotal !== transactionData.total) {
-            console.error(
-                `PRICE TAMPERING DETECTED: Client total=${transactionData.total}, ` +
-                `Verified total=${verifiedTotal}`
+        // 3. Deteksi manipulasi total kiriman
+        if (transactionData.total !== canonicalTotal) {
+            console.warn(
+                `[TAMPERING OVERRIDE] Total client (Rp ${transactionData.total}) ` +
+                `ditimpa dengan total kanonikal (Rp ${canonicalTotal})`
             );
-            // Gunakan total terverifikasi, abaikan total dari client
-            transactionData.total = verifiedTotal;
         }
+
+        const dateISO = new Date().toISOString();
+        const orderNumber = (typeof SecurityUtils !== 'undefined') 
+            ? SecurityUtils.sanitize(transactionData.orderNumber) 
+            : String(transactionData.orderNumber);
+
+        const customerName = (typeof SecurityUtils !== 'undefined')
+            ? SecurityUtils.sanitize(transactionData.customerName || 'Walk-in Customer')
+            : String(transactionData.customerName || 'Walk-in Customer');
+
+        const orderNotes = (typeof SecurityUtils !== 'undefined')
+            ? SecurityUtils.sanitize(transactionData.orderNotes || '-')
+            : String(transactionData.orderNotes || '-');
+
+        const paymentMethod = (typeof SecurityUtils !== 'undefined')
+            ? SecurityUtils.sanitize(transactionData.paymentMethod || 'Tunai')
+            : String(transactionData.paymentMethod || 'Tunai');
+
+        // 4. Hitung Cryptographic SHA-256 Checksum untuk data transaksi
+        const checksumPayload = {
+            orderNumber,
+            date: dateISO,
+            items: normalizedItems.map(i => ({ id: i.id, p: i.price, q: i.quantity })),
+            total: canonicalTotal,
+            paymentMethod,
+            customerName,
+            orderNotes
+        };
+
+        const sha256Checksum = await computeSHA256(checksumPayload);
 
         const database = await openDB();
         const tx = database.transaction('transactions', 'readwrite');
         const store = tx.objectStore('transactions');
 
         const record = {
-            date: new Date().toISOString(),
-            items: transactionData.items.map(item => ({
-                id: item.id,
-                name: SecurityUtils.sanitize(item.name),
-                price: item.price,
-                quantity: item.quantity
-            })),
-            total: verifiedTotal,
-            paymentMethod: SecurityUtils.sanitize(transactionData.paymentMethod),
-            customerName: SecurityUtils.sanitize(transactionData.customerName || 'Walk-in Customer'),
-            orderNumber: SecurityUtils.sanitize(transactionData.orderNumber),
-            checksum: computeChecksum({
-                items: transactionData.items,
-                total: verifiedTotal,
-                orderNumber: transactionData.orderNumber
-            })
+            date: dateISO,
+            orderNumber,
+            customerName,
+            orderNotes,
+            items: normalizedItems,
+            total: canonicalTotal,
+            paymentMethod,
+            checksum: sha256Checksum
         };
 
         const request = store.add(record);
         return new Promise((resolve, reject) => {
-            request.onsuccess = () => { record.id = request.result; resolve(record); };
+            request.onsuccess = () => {
+                record.id = request.result;
+                resolve(record);
+            };
             request.onerror = (e) => reject(e.target.error);
         });
+    }
+
+    // ─── Verifikasi Integritas Transaksi (Deteksi Edit Manual di DevTools) ──
+    async function verifyTransactionIntegrity(tx) {
+        if (!tx || !tx.checksum) return false;
+        const payload = {
+            orderNumber: tx.orderNumber,
+            date: tx.date,
+            items: (tx.items || []).map(i => ({ id: i.id, p: i.price, q: i.quantity })),
+            total: tx.total,
+            paymentMethod: tx.paymentMethod,
+            customerName: tx.customerName || 'Walk-in Customer',
+            orderNotes: tx.orderNotes || '-'
+        };
+        const expectedChecksum = await computeSHA256(payload);
+        return expectedChecksum === tx.checksum;
     }
 
     // ─── Ambil semua riwayat transaksi ───────────────────────
@@ -350,7 +441,18 @@ const KisanakDB = (() => {
         const store = tx.objectStore('transactions');
         const request = store.getAll();
         return new Promise((resolve, reject) => {
-            request.onsuccess = () => resolve(request.result);
+            request.onsuccess = async () => {
+                const results = request.result || [];
+                // Verifikasi integritas setiap transaksi secara asinkron
+                const verifiedResults = await Promise.all(results.map(async (record) => {
+                    const isValid = await verifyTransactionIntegrity(record);
+                    return {
+                        ...record,
+                        _isTampered: !isValid
+                    };
+                }));
+                resolve(verifiedResults);
+            };
             request.onerror = (e) => reject(e.target.error);
         });
     }
@@ -375,25 +477,28 @@ const KisanakDB = (() => {
         try {
             await openDB();
             await seedProducts();
-            console.log('Database Kedai Kisanak siap');
+            console.log('✅ Database Kedai Kisanak siap (Security Vault Active)');
             return true;
         } catch (error) {
-            console.error('Gagal inisialisasi database:', error);
+            console.error('❌ Gagal inisialisasi database:', error);
             return false;
         }
     }
 
-    // ─── Public API (Object.freeze mencegah penambahan method) ─
+    // ─── Public API (Object.freeze mencegah tampering method) ─
     return Object.freeze({
         init,
         getAllProducts,
         getProductById,
-        getProductsByCategory,
         updateStock,
         saveTransaction,
         getAllTransactions,
+        verifyTransactionIntegrity,
         resetDatabase,
         getCanonicalPrice,
-        validateCartPrices
+        getCanonicalProduct,
+        validateCartPrices,
+        computeSHA256
     });
 })();
+

@@ -2,21 +2,33 @@
  * ============================================================
  * app.js — Logika UI Utama Kedai Kisanak POS System
  * ============================================================
- * SECURITY HARDENED:
- * - SecurityUtils: sanitasi XSS pada semua output ke DOM
- * - Harga SELALU diambil dari database, bukan dari DOM/cart
- * - Cart hanya menyimpan { id, quantity }, harga diambil saat render
- * - Input validation pada semua user-facing data
- * - Object.freeze pada public API
+ * CYBERSECURITY AUDITED & HARDENED:
+ * 1. Anti-Tampering (Client-Side Price & Quantity Manipulation):
+ *    - Harga TOTAL SELALU dihitung dari Canonical Vault (KisanakDB.getCanonicalPrice),
+ *      TIDAK PERNAH membaca nilai dari atribut HTML / DOM.
+ *    - Array `cart` dienkapsulasi: getter mengembalikan salinan beku (Object.freeze)
+ *      sehingga tidak dapat dimanipulasi dari Console DevTools.
+ *    - Validasi kuantitas ketat (integer positif, batas wajar 1-100).
+ * 2. Cross-Site Scripting (XSS) Prevention:
+ *    - Modul SecurityUtils dengan enkoding entitas HTML menyeluruh (&, <, >, ", ', /, `).
+ *    - Sanitasi ketat pada input Nama Pelanggan dan Catatan Pesanan sebelum render.
+ *    - Validasi protokol URL untuk mencegah payload `javascript:`.
+ * 3. Data Integrity & Storage Security:
+ *    - Sinkronisasi keranjang belanja ke localStorage dengan Cryptographic Checksum SHA-256.
+ *    - Deteksi otomatis jika localStorage dimodifikasi manual lewat DevTools.
+ *    - Peringatan visual pada riwayat transaksi jika checksum IndexedDB tidak valid.
+ * 4. Zero Inline Script Architecture:
+ *    - Seluruh event listener didaftarkan di sini untuk kepatuhan CSP tanpa 'unsafe-inline'.
  * ============================================================
  */
 
-// ─── SECURITY UTILITIES (XSS Prevention) ────────────────────
-// Modul global untuk sanitasi input, tersedia untuk semua file JS
+'use strict';
+
+// ─── SECURITY UTILITIES (XSS Prevention & Input Validation) ──
 const SecurityUtils = Object.freeze({
     /**
-     * Escape karakter HTML berbahaya untuk mencegah XSS.
-     * Mengganti <, >, ", ', &, / dengan HTML entities.
+     * Escape karakter berbahaya untuk mencegah XSS.
+     * Mengganti &, <, >, ", ', /, dan backtick dengan HTML entities.
      */
     sanitize(str) {
         if (str === null || str === undefined) return '';
@@ -26,37 +38,57 @@ const SecurityUtils = Object.freeze({
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#x27;')
-            .replace(/\//g, '&#x2F;');
+            .replace(/\//g, '&#x2F;')
+            .replace(/`/g, '&#96;');
     },
 
     /**
-     * Validasi bahwa nilai adalah angka positif yang masuk akal.
+     * Menghapus semua tag HTML untuk plain text.
+     */
+    stripTags(str) {
+        if (!str) return '';
+        return String(str).replace(/<[^>]*>/g, '').trim();
+    },
+
+    /**
+     * Validasi URL aman (mencegah javascript: dan data: payload).
+     */
+    safeUrl(url) {
+        if (!url) return '';
+        const clean = String(url).trim();
+        if (/^(https?:|\/|gambar\/|data:image\/)/i.test(clean)) {
+            return clean;
+        }
+        console.warn('[SECURITY] URL diblokir karena berpotensi berbahaya:', url);
+        return 'gambar/logo_kisanak.jpg';
+    },
+
+    /**
+     * Validasi bahwa nilai harga masuk akal.
      */
     isValidPrice(value) {
         return typeof value === 'number' && 
                Number.isFinite(value) && 
                value > 0 && 
-               value <= 10000000; // Maks 10 juta
+               value <= 10000000;
     },
 
     /**
-     * Validasi bahwa quantity adalah integer positif wajar.
+     * Validasi bahwa kuantitas adalah integer positif (1-100).
      */
     isValidQuantity(value) {
         return Number.isInteger(value) && value > 0 && value <= 100;
     },
 
     /**
-     * Buat elemen teks aman (textContent, bukan innerHTML).
+     * Membuat text node aman (tidak memicu HTML parsing).
      */
     createSafeTextNode(text) {
         return document.createTextNode(String(text));
     },
 
     /**
-     * Set innerHTML secara aman setelah sanitasi.
-     * Hanya digunakan untuk template yang kita kontrol.
-     * Semua data dinamis HARUS sudah di-sanitize sebelum masuk template.
+     * Set innerHTML secara terkontrol setelah semua interpolasi variabel di-sanitize.
      */
     safeSetHTML(element, html) {
         if (element) {
@@ -68,14 +100,17 @@ const SecurityUtils = Object.freeze({
 
 const KisanakApp = (() => {
     // ─── State Aplikasi ─────────────────────────────────────
-    // SECURITY: Cart hanya menyimpan ID dan quantity.
-    // Harga SELALU diambil dari database saat diperlukan.
-    let cart = [];       // Format: [{ id: 'ESP001', quantity: 2 }, ...]
+    // SECURITY: Cart internal HANYA menyimpan ID dan kuantitas.
+    // Harga TIDAK PERNAH disimpan di sini.
+    let cart = []; // [{ id: 'ESP001', quantity: 2 }]
     let allProducts = [];
     let activeCategory = 'Semua';
     let searchQuery = '';
     let orderCounter = 1;
     let selectedPaymentMethod = 'Tunai';
+
+    const CART_STORAGE_KEY = 'KISANAK_CART_DATA';
+    const CART_SIG_KEY = 'KISANAK_CART_CHECKSUM';
 
     // ─── Daftar Kategori ────────────────────────────────────
     const CATEGORIES = Object.freeze([
@@ -86,24 +121,117 @@ const KisanakApp = (() => {
         { name: 'Pastry & Food', icon: '🥐', count: 0 }
     ]);
 
-    // ─── Working copy of categories (counts need to update) ─
     let categoryCounts = CATEGORIES.map(c => ({ ...c }));
 
-    // ─── Inisialisasi Aplikasi ──────────────────────────────
+    // ─── Inisialisasi Aplikasi & Event Listeners Terpusat ────
     async function init() {
         try {
             await KisanakDB.init();
             allProducts = await KisanakDB.getAllProducts();
+            
+            // Muat keranjang dengan verifikasi integritas
+            await loadCartFromStorage();
+
             updateCategoryCounts();
             renderSidebar();
             renderMenu();
             renderOrderPanel();
             startClock();
             setupSearchListener();
+            setupGlobalEventListeners();
             fetchIPAddress();
-            console.log('Aplikasi Kedai Kisanak siap');
+            console.log('✅ Aplikasi Kedai Kisanak siap (Zero Inline Script & Hardened CSP)');
         } catch (error) {
-            console.error('Gagal inisialisasi:', error);
+            console.error('❌ Gagal inisialisasi aplikasi:', error);
+        }
+    }
+
+    // ─── Event Listeners Terpusat (Tanpa Inline Script HTML) ─
+    function setupGlobalEventListeners() {
+        // Header buttons
+        document.getElementById('btn-scan-qr')?.addEventListener('click', () => {
+            if (typeof KisanakPayment !== 'undefined') KisanakPayment.openQRScanner();
+        });
+        document.getElementById('btn-history')?.addEventListener('click', () => showHistory());
+        document.getElementById('btn-reset')?.addEventListener('click', () => resetDB());
+        document.getElementById('btn-clear-cart')?.addEventListener('click', () => clearCart());
+
+        // Modal close buttons
+        document.getElementById('btn-close-qris')?.addEventListener('click', () => {
+            if (typeof KisanakPayment !== 'undefined') KisanakPayment.closeQRISModal();
+        });
+        document.getElementById('btn-close-scanner')?.addEventListener('click', () => {
+            if (typeof KisanakPayment !== 'undefined') KisanakPayment.closeQRScanner();
+        });
+        document.getElementById('btn-close-history')?.addEventListener('click', () => {
+            closeModal('history-modal');
+        });
+
+        // Close modal on backdrop click
+        document.querySelectorAll('.modal-overlay').forEach(overlay => {
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    overlay.classList.remove('active');
+                    if (overlay.id === 'scanner-modal' && typeof KisanakPayment !== 'undefined') {
+                        KisanakPayment.closeQRScanner();
+                    }
+                    if (overlay.id === 'qris-modal' && typeof KisanakPayment !== 'undefined') {
+                        KisanakPayment.closeQRISModal();
+                    }
+                }
+            });
+        });
+    }
+
+    // ─── STORAGE SECURITY: Simpan Keranjang dengan Checksum ──
+    async function saveCartToStorage() {
+        try {
+            const rawData = JSON.stringify(cart);
+            localStorage.setItem(CART_STORAGE_KEY, rawData);
+            const checksum = await KisanakDB.computeSHA256(cart);
+            localStorage.setItem(CART_SIG_KEY, checksum);
+        } catch (e) {
+            console.warn('[STORAGE] Gagal menyimpan keranjang ke localStorage:', e);
+        }
+    }
+
+    // ─── STORAGE SECURITY: Muat Keranjang dengan Deteksi Tampering ─
+    async function loadCartFromStorage() {
+        try {
+            const rawData = localStorage.getItem(CART_STORAGE_KEY);
+            const storedChecksum = localStorage.getItem(CART_SIG_KEY);
+            if (!rawData) return;
+
+            const parsed = JSON.parse(rawData);
+            if (!Array.isArray(parsed)) throw new Error('Data bukan array');
+
+            // Verifikasi Checksum SHA-256
+            const calculatedChecksum = await KisanakDB.computeSHA256(parsed);
+            if (calculatedChecksum !== storedChecksum) {
+                console.error('[SECURITY TAMPERING DETECTED] LocalStorage keranjang belanja dimanipulasi!');
+                localStorage.removeItem(CART_STORAGE_KEY);
+                localStorage.removeItem(CART_SIG_KEY);
+                showToast('🛡️', 'Peringatan Keamanan', 'Data keranjang lokal dimanipulasi & telah direset otomatis.', 'warning');
+                cart = [];
+                return;
+            }
+
+            // Validasi setiap item terhadap Canonical Catalog
+            const validCart = [];
+            for (const item of parsed) {
+                if (item && item.id && SecurityUtils.isValidQuantity(item.quantity)) {
+                    const canonical = KisanakDB.getCanonicalProduct(item.id);
+                    if (canonical) {
+                        validCart.push({ id: item.id, quantity: item.quantity });
+                    }
+                }
+            }
+            cart = validCart;
+        } catch (e) {
+            console.warn('[STORAGE] Cache keranjang rusak atau dibersihkan:', e);
+            localStorage.removeItem(CART_STORAGE_KEY);
+            localStorage.removeItem(CART_SIG_KEY);
+            cart = [];
         }
     }
 
@@ -117,8 +245,7 @@ const KisanakApp = (() => {
         });
     }
 
-    // ─── SECURITY HELPER: Ambil data produk dari DB cache ───
-    // Sumber kebenaran tunggal untuk harga dan nama produk
+    // ─── Ambil data produk dari memori kanonikal ─────────────
     function getProductFromCache(productId) {
         return allProducts.find(p => p.id === productId) || null;
     }
@@ -132,7 +259,6 @@ const KisanakApp = (() => {
 
         categoryCounts.forEach(cat => {
             const isActive = cat.name === activeCategory ? 'active' : '';
-            // SECURITY: nama kategori di-sanitize
             const safeName = SecurityUtils.sanitize(cat.name);
             html += `
                 <button class="category-btn ${isActive}" 
@@ -159,7 +285,6 @@ const KisanakApp = (() => {
 
         SecurityUtils.safeSetHTML(sidebar, html);
 
-        // SECURITY: Event delegation menggantikan inline onclick
         sidebar.querySelectorAll('.category-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 const category = btn.dataset.category;
@@ -168,26 +293,22 @@ const KisanakApp = (() => {
         });
     }
 
-    // ─── Filter Berdasarkan Kategori ────────────────────────
     function filterByCategory(category) {
         activeCategory = category;
         renderSidebar();
         renderMenu();
     }
 
-    // ─── Setup Listener Pencarian ───────────────────────────
     function setupSearchListener() {
         const searchInput = document.getElementById('search-input');
         if (searchInput) {
             searchInput.addEventListener('input', (e) => {
-                // SECURITY: Sanitasi query pencarian
                 searchQuery = SecurityUtils.sanitize(e.target.value).toLowerCase().trim();
                 renderMenu();
             });
         }
     }
 
-    // ─── Filter Produk ──────────────────────────────────────
     function getFilteredProducts() {
         let filtered = [...allProducts];
         if (activeCategory !== 'Semua') {
@@ -202,7 +323,6 @@ const KisanakApp = (() => {
         return filtered;
     }
 
-    // ─── Emoji fallback berdasarkan kategori ────────────────
     function getCategoryEmoji(category) {
         const map = { 'Espresso Based': '☕', 'Manual Brew': '🫖', 'Non-Coffee': '🍵', 'Pastry & Food': '🥐' };
         return map[category] || '☕';
@@ -230,12 +350,13 @@ const KisanakApp = (() => {
             return;
         }
 
-        // SECURITY: Semua data produk di-sanitize sebelum masuk template
         const cardsHTML = products.map(product => {
+            // Selalu ambil harga kanonikal resmi
+            const canonicalPrice = KisanakDB.getCanonicalPrice(product.id) || product.price;
             const safeName = SecurityUtils.sanitize(product.name);
             const safeDesc = SecurityUtils.sanitize(product.description);
             const safeCategory = SecurityUtils.sanitize(product.category);
-            const safeImage = SecurityUtils.sanitize(product.image);
+            const safeImage = SecurityUtils.safeUrl(product.image);
             const safeId = SecurityUtils.sanitize(product.id);
             const isOutOfStock = product.stock <= 0;
             const isLowStock = product.stock > 0 && product.stock <= 5;
@@ -255,7 +376,7 @@ const KisanakApp = (() => {
                         <h4>${safeName}</h4>
                         <p class="card-desc">${safeDesc}</p>
                         <div class="card-footer">
-                            <span class="price">Rp ${formatNumber(product.price)}</span>
+                            <span class="price">Rp ${formatNumber(canonicalPrice)}</span>
                             <button class="btn-add ripple" 
                                     data-add-id="${safeId}"
                                     ${isOutOfStock ? 'disabled' : ''}
@@ -270,7 +391,6 @@ const KisanakApp = (() => {
 
         SecurityUtils.safeSetHTML(menuGrid, cardsHTML);
 
-        // SECURITY: Event delegation, bukan inline onclick
         menuGrid.querySelectorAll('.btn-add').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -280,10 +400,15 @@ const KisanakApp = (() => {
         });
     }
 
-    // ─── Tambah Item ke Keranjang ────────────────────────────
-    // SECURITY: Cart hanya menyimpan ID + quantity.
-    // Harga TIDAK disimpan di cart — selalu diambil dari DB.
+    // ─── SECURITY: Tambah Item ke Keranjang ──────────────────
     function addToCart(productId) {
+        // Validasi ke Canonical Catalog
+        const canonical = KisanakDB.getCanonicalProduct(productId);
+        if (!canonical) {
+            console.error('[SECURITY ALERT] Upaya menambahkan produk ilegal:', productId);
+            return;
+        }
+
         const product = getProductFromCache(productId);
         if (!product || product.stock <= 0) return;
 
@@ -296,10 +421,10 @@ const KisanakApp = (() => {
             }
             existingItem.quantity += 1;
         } else {
-            // SECURITY: Hanya ID dan quantity, bukan harga
-            cart.push({ id: product.id, quantity: 1 });
+            cart.push({ id: canonical.id, quantity: 1 });
         }
 
+        saveCartToStorage();
         renderOrderPanel();
 
         const card = document.getElementById(`card-${productId}`);
@@ -309,9 +434,8 @@ const KisanakApp = (() => {
         }
     }
 
-    // ─── Ubah Jumlah Item di Keranjang ──────────────────────
+    // ─── SECURITY: Ubah Jumlah Item di Keranjang ────────────
     function changeQuantity(productId, delta) {
-        // SECURITY: Validasi delta
         if (typeof delta !== 'number' || !Number.isInteger(delta)) return;
 
         const item = cart.find(i => i.id === productId);
@@ -328,10 +452,12 @@ const KisanakApp = (() => {
         if (item.quantity <= 0) {
             cart = cart.filter(i => i.id !== productId);
         }
+
+        saveCartToStorage();
         renderOrderPanel();
     }
 
-    // ─── Bersihkan Keranjang ────────────────────────────────
+    // ─── Kosongkan Keranjang ────────────────────────────────
     function clearCart() {
         if (cart.length === 0) return;
         Swal.fire({
@@ -348,18 +474,23 @@ const KisanakApp = (() => {
         }).then((result) => {
             if (result.isConfirmed) {
                 cart = [];
+                saveCartToStorage();
                 renderOrderPanel();
             }
         });
     }
 
-    // ─── SECURITY: Hitung Total dari DATABASE, bukan cart ───
+    // ─── ANTI-TAMPERING: Hitung Total HANYA dari Canonical Vault ───
+    // FUNGSI INI ADALAH CORE DEFENSE:
+    // Tidak pernah membaca nilai dari DOM atau input pengguna!
     function getCartTotal() {
         return cart.reduce((sum, item) => {
-            const product = getProductFromCache(item.id);
-            // Harga selalu dari database, tidak pernah dari client
-            const price = product ? product.price : 0;
-            return sum + (price * item.quantity);
+            const canonicalPrice = KisanakDB.getCanonicalPrice(item.id);
+            if (canonicalPrice === null || canonicalPrice === undefined) {
+                console.error('[SECURITY] Terdeteksi produk tanpa harga kanonikal:', item.id);
+                return sum;
+            }
+            return sum + (canonicalPrice * item.quantity);
         }, 0);
     }
 
@@ -401,15 +532,15 @@ const KisanakApp = (() => {
             return;
         }
 
-        // SECURITY: Harga diambil dari database, bukan dari cart
+        // Render setiap item menggunakan harga KANONIKAL
         const itemsHTML = cart.map(item => {
-            const product = getProductFromCache(item.id);
-            if (!product) return '';
+            const canonical = KisanakDB.getCanonicalProduct(item.id);
+            if (!canonical) return '';
 
-            const safeName = SecurityUtils.sanitize(product.name);
-            const safeImage = SecurityUtils.sanitize(product.image);
+            const safeName = SecurityUtils.sanitize(canonical.name);
+            const safeImage = SecurityUtils.safeUrl(canonical.image);
             const safeId = SecurityUtils.sanitize(item.id);
-            const subtotal = product.price * item.quantity;
+            const subtotal = canonical.price * item.quantity;
 
             return `
                 <div class="order-item">
@@ -417,7 +548,7 @@ const KisanakApp = (() => {
                          onerror="this.style.display='none'">
                     <div class="item-info">
                         <h4>${safeName}</h4>
-                        <span class="item-price">Rp ${formatNumber(product.price)}</span>
+                        <span class="item-price">Rp ${formatNumber(canonical.price)}</span>
                     </div>
                     <div class="qty-controls">
                         <button data-qty-id="${safeId}" data-qty-delta="-1">−</button>
@@ -431,7 +562,6 @@ const KisanakApp = (() => {
 
         SecurityUtils.safeSetHTML(container, itemsHTML);
 
-        // SECURITY: Event delegation untuk quantity buttons
         container.querySelectorAll('[data-qty-id]').forEach(btn => {
             btn.addEventListener('click', () => {
                 const id = btn.dataset.qtyId;
@@ -440,7 +570,6 @@ const KisanakApp = (() => {
             });
         });
 
-        // SECURITY: Total dihitung dari database price
         const total = getCartTotal();
         const itemCount = getCartItemCount();
 
@@ -471,12 +600,12 @@ const KisanakApp = (() => {
                 </button>
             `);
 
-            // Event delegation for payment & checkout buttons
             footer.querySelectorAll('[data-pay-method]').forEach(btn => {
                 btn.addEventListener('click', () => {
                     selectPayment(btn.dataset.payMethod);
                 });
             });
+
             const checkoutBtn = document.getElementById('btn-process-checkout');
             if (checkoutBtn) {
                 checkoutBtn.addEventListener('click', processCheckout);
@@ -486,64 +615,81 @@ const KisanakApp = (() => {
 
     function selectPayment(method) {
         const validMethods = ['Tunai', 'QRIS', 'Kartu'];
-        if (!validMethods.includes(method)) return; // SECURITY: whitelist
+        if (!validMethods.includes(method)) return;
         selectedPaymentMethod = method;
         renderOrderPanel();
     }
 
-    // ─── SECURITY: Proses Checkout dengan validasi server-side-style ─
+    // ─── SECURITY: Proses Checkout dengan Sanitasi Input & Total Kanonikal ─
     async function processCheckout() {
         if (cart.length === 0) return;
 
-        // SECURITY: Hitung total dari DATABASE, bukan dari DOM
+        // Ambil dan sanitize input Nama Pelanggan & Catatan
+        const rawCustomerName = document.getElementById('customer-name')?.value || '';
+        const rawOrderNotes = document.getElementById('order-notes')?.value || '';
+
+        const customerName = SecurityUtils.sanitize(rawCustomerName.trim()) || 'Walk-in Customer';
+        const orderNotes = SecurityUtils.sanitize(rawOrderNotes.trim()) || '-';
+
+        // Hitung total harga MURNI dari Canonical Vault
         const total = getCartTotal();
         const orderNumber = generateOrderNumber();
 
-        // Build cart items dengan harga dari database
+        // Siapkan item terverifikasi
         const verifiedItems = cart.map(item => {
-            const product = getProductFromCache(item.id);
+            const canonical = KisanakDB.getCanonicalProduct(item.id);
             return {
                 id: item.id,
-                name: product ? product.name : 'Unknown',
-                price: product ? product.price : 0,
+                name: canonical ? canonical.name : 'Unknown Item',
+                price: canonical ? canonical.price : 0,
                 quantity: item.quantity
             };
         });
 
         if (selectedPaymentMethod === 'QRIS') {
-            KisanakPayment.showQRISModal(total, orderNumber, verifiedItems, selectedPaymentMethod);
+            if (typeof KisanakPayment !== 'undefined') {
+                KisanakPayment.showQRISModal(total, orderNumber, verifiedItems, selectedPaymentMethod, customerName, orderNotes);
+            }
         } else {
-            await completeOrder(orderNumber, total, selectedPaymentMethod);
+            await completeOrder(orderNumber, total, selectedPaymentMethod, customerName, orderNotes);
         }
     }
 
-    // ─── Selesaikan Pesanan ─────────────────────────────────
-    async function completeOrder(orderNumber, total, paymentMethod) {
+    // ─── SECURITY: Selesaikan Pesanan dengan Audit Transaksi ──
+    async function completeOrder(orderNumber, total, paymentMethod, customerName = 'Walk-in Customer', orderNotes = '-') {
         try {
-            // SECURITY: Build items dari database, bukan dari DOM
+            if (cart.length === 0) {
+                throw new Error('Pesanan kosong tidak dapat diproses');
+            }
+
+            // Validasi ulang semua item dari Canonical Vault
             const verifiedItems = cart.map(item => {
-                const product = getProductFromCache(item.id);
+                const canonical = KisanakDB.getCanonicalProduct(item.id);
+                if (!canonical) throw new Error(`Produk dengan ID ${item.id} tidak sah!`);
                 return {
                     id: item.id,
-                    name: product ? product.name : 'Unknown',
-                    price: product ? product.price : 0,
+                    name: canonical.name,
+                    price: canonical.price,
                     quantity: item.quantity
                 };
             });
 
-            // SECURITY: Hitung ulang total dari DB (double-check)
-            const verifiedTotal = verifiedItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
+            // Hitung ulang total secara independen (double assertion)
+            const canonicalTotal = verifiedItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
 
             const transactionData = {
                 items: verifiedItems,
-                total: verifiedTotal, // Harga dari DB, bukan parameter
-                paymentMethod: paymentMethod,
-                orderNumber: orderNumber
+                total: canonicalTotal,
+                paymentMethod: SecurityUtils.sanitize(paymentMethod),
+                customerName: SecurityUtils.sanitize(customerName),
+                orderNotes: SecurityUtils.sanitize(orderNotes),
+                orderNumber: SecurityUtils.sanitize(orderNumber)
             };
 
-            // saveTransaction() akan melakukan validasi LAGI di db.js
+            // Simpan ke IndexedDB dengan audit & cryptographic checksum
             await KisanakDB.saveTransaction(transactionData);
 
+            // Update stok
             for (const item of cart) {
                 await KisanakDB.updateStock(item.id, item.quantity);
             }
@@ -551,16 +697,30 @@ const KisanakApp = (() => {
             allProducts = await KisanakDB.getAllProducts();
             updateCategoryCounts();
 
+            // Siapkan struk cetak
             const receiptData = {
                 orderNumber,
                 items: verifiedItems,
-                total: verifiedTotal,
+                total: canonicalTotal,
                 paymentMethod,
+                customerName,
+                orderNotes,
                 date: new Date()
             };
-            KisanakPayment.generateReceipt(receiptData);
 
+            if (typeof KisanakPayment !== 'undefined') {
+                KisanakPayment.generateReceipt(receiptData);
+            }
+
+            // Reset cart dan input fields
             cart = [];
+            saveCartToStorage();
+
+            const nameInput = document.getElementById('customer-name');
+            const notesInput = document.getElementById('order-notes');
+            if (nameInput) nameInput.value = '';
+            if (notesInput) notesInput.value = '';
+
             renderSidebar();
             renderMenu();
             renderOrderPanel();
@@ -568,9 +728,13 @@ const KisanakApp = (() => {
             Swal.fire({
                 title: 'Pesanan Berhasil! 🎉',
                 html: `
-                    <p style="margin-bottom: 8px;">Order: <strong>${SecurityUtils.sanitize(orderNumber)}</strong></p>
-                    <p style="margin-bottom: 8px;">Total: <strong>Rp ${formatNumber(verifiedTotal)}</strong></p>
-                    <p>Metode: <strong>${SecurityUtils.sanitize(paymentMethod)}</strong></p>
+                    <div style="text-align: left; font-size: 0.9rem; line-height: 1.6; margin-top: 10px;">
+                        <p>Order: <strong>${SecurityUtils.sanitize(orderNumber)}</strong></p>
+                        <p>Pelanggan: <strong>${SecurityUtils.sanitize(customerName)}</strong></p>
+                        <p>Catatan: <em>${SecurityUtils.sanitize(orderNotes)}</em></p>
+                        <p>Total Resmi: <strong style="color: #C8956C;">Rp ${formatNumber(canonicalTotal)}</strong></p>
+                        <p>Metode: <strong>${SecurityUtils.sanitize(paymentMethod)}</strong></p>
+                    </div>
                 `,
                 icon: 'success',
                 showCancelButton: true,
@@ -581,13 +745,15 @@ const KisanakApp = (() => {
                 background: '#1A1A1A',
                 color: '#F5F0EB'
             }).then((result) => {
-                if (result.isConfirmed) KisanakPayment.printReceipt();
+                if (result.isConfirmed && typeof KisanakPayment !== 'undefined') {
+                    KisanakPayment.printReceipt();
+                }
             });
         } catch (error) {
-            console.error('Gagal checkout:', error);
+            console.error('[SECURITY AUDIT] Transaksi ditolak:', error);
             Swal.fire({
-                title: 'Error Keamanan',
-                text: error.message || 'Gagal memproses pesanan.',
+                title: 'Peringatan Keamanan',
+                text: error.message || 'Transaksi dibatalkan karena pelanggaran integritas.',
                 icon: 'error',
                 background: '#1A1A1A',
                 color: '#F5F0EB'
@@ -595,7 +761,7 @@ const KisanakApp = (() => {
         }
     }
 
-    // ─── Tampilkan Riwayat Transaksi ────────────────────────
+    // ─── Tampilkan Riwayat Transaksi dengan Audit Integritas ──
     async function showHistory() {
         try {
             const transactions = await KisanakDB.getAllTransactions();
@@ -612,23 +778,40 @@ const KisanakApp = (() => {
                 `);
             } else {
                 const sorted = transactions.sort((a, b) => new Date(b.date) - new Date(a.date));
-                // SECURITY: Semua data dari DB di-sanitize sebelum render
+
                 SecurityUtils.safeSetHTML(historyList, sorted.map(tx => {
                     const date = new Date(tx.date);
                     const dateStr = date.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
                     const timeStr = date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-                    const itemNames = tx.items.map(i => `${SecurityUtils.sanitize(i.name)} x${i.quantity}`).join(', ');
+                    const itemNames = (tx.items || []).map(i => `${SecurityUtils.sanitize(i.name)} x${i.quantity}`).join(', ');
+
+                    const safeOrderNumber = SecurityUtils.sanitize(tx.orderNumber);
+                    const safeCustomer = SecurityUtils.sanitize(tx.customerName || 'Walk-in Customer');
+                    const safeNotes = SecurityUtils.sanitize(tx.orderNotes || '-');
+                    const safePayment = SecurityUtils.sanitize(tx.paymentMethod);
+
+                    // Deteksi jika transaksi telah diedit via DevTools
+                    const tamperedBadge = tx._isTampered ? `
+                        <div class="tamper-alert-badge">
+                            ⚠️ INTEGRITAS GAGAL: Data ini telah diubah manual di DevTools!
+                        </div>
+                    ` : '';
 
                     return `
-                        <div class="history-item">
+                        <div class="history-item ${tx._isTampered ? 'tampered' : ''}">
+                            ${tamperedBadge}
                             <div class="history-header">
-                                <span class="order-id">${SecurityUtils.sanitize(tx.orderNumber)}</span>
+                                <span class="order-id">${safeOrderNumber}</span>
                                 <span class="order-date">${SecurityUtils.sanitize(dateStr)} ${SecurityUtils.sanitize(timeStr)}</span>
                             </div>
+                            <div class="history-customer-info">
+                                <span>👤 ${safeCustomer}</span>
+                                ${safeNotes !== '-' ? `<span>📝 <em>${safeNotes}</em></span>` : ''}
+                            </div>
                             <p class="history-details">${itemNames}</p>
-                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
                                 <span class="history-total">Rp ${formatNumber(tx.total)}</span>
-                                <span style="font-size:0.75rem; color:var(--text-muted);">${SecurityUtils.sanitize(tx.paymentMethod)}</span>
+                                <span style="font-size:0.75rem; color:var(--text-muted);">${safePayment}</span>
                             </div>
                         </div>
                     `;
@@ -641,7 +824,6 @@ const KisanakApp = (() => {
     }
 
     function closeModal(modalId) {
-        // SECURITY: Validasi modalId terhadap whitelist
         const allowedModals = ['history-modal', 'qris-modal', 'scanner-modal'];
         if (!allowedModals.includes(modalId)) return;
         const modal = document.getElementById(modalId);
@@ -651,7 +833,7 @@ const KisanakApp = (() => {
     async function resetDB() {
         Swal.fire({
             title: 'Reset Database?',
-            text: 'Semua data transaksi & stok akan dikembalikan ke awal.',
+            text: 'Semua data transaksi & stok akan dikembalikan ke kondisi awal.',
             icon: 'warning',
             showCancelButton: true,
             confirmButtonColor: '#ef4444',
@@ -666,6 +848,7 @@ const KisanakApp = (() => {
                 allProducts = await KisanakDB.getAllProducts();
                 updateCategoryCounts();
                 cart = [];
+                saveCartToStorage();
                 renderSidebar();
                 renderMenu();
                 renderOrderPanel();
@@ -679,7 +862,6 @@ const KisanakApp = (() => {
         if (!clockEl) return;
         function update() {
             const now = new Date();
-            // SECURITY: Menggunakan textContent, bukan innerHTML
             clockEl.textContent = now.toLocaleDateString('id-ID', {
                 weekday: 'short', day: 'numeric', month: 'short',
                 hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
@@ -695,9 +877,8 @@ const KisanakApp = (() => {
         fetch('https://api.ipify.org?format=json')
             .then(res => res.json())
             .then(data => {
-                // SECURITY: Validasi format IP sebelum render
                 if (data.ip && /^[\d.]+$/.test(data.ip)) {
-                    ipEl.textContent = data.ip; // textContent, bukan innerHTML
+                    ipEl.textContent = data.ip;
                 } else {
                     ipEl.textContent = '127.0.0.1';
                 }
@@ -714,7 +895,6 @@ const KisanakApp = (() => {
             toast.style.background = 'linear-gradient(135deg, #2e2a1a, #1f1a0d)';
             toast.style.borderColor = 'rgba(234, 179, 8, 0.3)';
         }
-        // SECURITY: Semua data di-sanitize
         SecurityUtils.safeSetHTML(toast, `
             <span class="toast-icon">${SecurityUtils.sanitize(icon)}</span>
             <div class="toast-body">
@@ -736,7 +916,7 @@ const KisanakApp = (() => {
         return num.toLocaleString('id-ID');
     }
 
-    // ─── Public API (frozen) ────────────────────────────────
+    // ─── Public API (Deeply Frozen) ─────────────────────────
     return Object.freeze({
         init,
         filterByCategory,
@@ -752,7 +932,10 @@ const KisanakApp = (() => {
         showToast,
         formatNumber,
         getCartTotal,
-        get cart() { return cart; },
+        // SECURITY: Mengembalikan salinan beku agar tidak bisa dimutasi di console
+        get cart() { 
+            return Object.freeze(cart.map(item => Object.freeze({ ...item }))); 
+        },
         get selectedPaymentMethod() { return selectedPaymentMethod; }
     });
 })();

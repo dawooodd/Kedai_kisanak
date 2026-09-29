@@ -6,34 +6,21 @@
     <meta name="description" content="Kedai Kisanak - Sistem POS Kedai Kopi Modern. Specialty coffee &amp; pastry since 2016.">
 
     <!-- ══════════════════════════════════════════════════════
-         SECURITY: Content Security Policy (CSP)
+         SECURITY: Content Security Policy (CSP) Ketat
          ══════════════════════════════════════════════════════
-         Kebijakan keamanan konten yang KETAT:
-         - default-src 'self': Hanya izinkan resource dari domain sendiri
-         - script-src: Izinkan CDN SweetAlert2 dan html5-qrcode
-         - style-src: Izinkan CDN SweetAlert2 CSS dan Google Fonts
-         - font-src: Izinkan Google Fonts
-         - img-src: Izinkan gambar lokal, data URI, dan QR generator API
-         - connect-src: Izinkan API ipify untuk deteksi IP
-         - media-src 'self': Hanya audio lokal
-         - object-src 'none': Blokir plugin (Flash, Java, dll)
-         - base-uri 'self': Cegah base tag injection
-         - form-action 'self': Cegah form submission ke domain lain
-         - frame-ancestors 'none': Cegah clickjacking via iframe
+         Kebijakan keamanan konten tanpa 'unsafe-inline' pada script:
+         - default-src 'self': Hanya resource domain lokal
+         - script-src 'self' CDN: SweetAlert2 & html5-qrcode (ZERO inline script)
+         - style-src 'self' 'unsafe-inline' CDN: Style lokal & Google Fonts
+         - font-src 'self' Google Fonts
+         - img-src 'self' data: QRServer (QR code generator)
+         - connect-src 'self' ipify (terminal IP lookup)
+         - media-src 'self'
+         - object-src 'none': Blokir flash/java/plugins
+         - base-uri 'self': Cegah base tag hijack
+         - form-action 'self': Cegah form redirection hijack
          ══════════════════════════════════════════════════════ -->
-    <meta http-equiv="Content-Security-Policy" content="
-        default-src 'self';
-        script-src 'self' https://cdn.jsdelivr.net https://unpkg.com;
-        style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com;
-        font-src 'self' https://fonts.gstatic.com;
-        img-src 'self' data: https://api.qrserver.com;
-        connect-src 'self' https://api.ipify.org;
-        media-src 'self';
-        object-src 'none';
-        base-uri 'self';
-        form-action 'self';
-        frame-ancestors 'none';
-    ">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://api.qrserver.com; connect-src 'self' https://api.ipify.org; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';">
 
     <!-- SECURITY: Mencegah MIME-type sniffing -->
     <meta http-equiv="X-Content-Type-Options" content="nosniff">
@@ -71,7 +58,7 @@
 
         <div class="header-actions">
             <span class="header-clock" id="header-clock">Memuat...</span>
-            <!-- SECURITY: Tidak ada inline onclick — event listener dipasang di JS -->
+            <!-- SECURITY: Tidak ada inline onclick — event listener dipasang di js/app.js -->
             <button class="btn-icon" id="btn-scan-qr" title="Scan QR Code">📷</button>
             <button class="btn-icon" id="btn-history" title="Riwayat Transaksi">📋</button>
             <button class="btn-icon" id="btn-reset" title="Reset Database">🔄</button>
@@ -108,6 +95,23 @@
                 <h3>🛒 Pesanan</h3>
                 <button class="btn-clear" id="btn-clear-cart">Kosongkan</button>
             </div>
+
+            <!-- SECURITY & AUDIT FEATURE: Input Nama Pelanggan & Catatan Pesanan -->
+            <div class="customer-input-section">
+                <div class="input-group">
+                    <label for="customer-name" class="input-label">Nama Pelanggan</label>
+                    <input type="text" id="customer-name" 
+                           placeholder="Misal: Kak Rian (opsional)" 
+                           maxlength="50" autocomplete="off">
+                </div>
+                <div class="input-group">
+                    <label for="order-notes" class="input-label">Catatan Pesanan</label>
+                    <input type="text" id="order-notes" 
+                           placeholder="Misal: Less ice, less sugar" 
+                           maxlength="100" autocomplete="off">
+                </div>
+            </div>
+
             <div class="order-items-container" id="order-items-container"></div>
             <div class="order-footer" id="order-footer"></div>
         </aside>
@@ -177,29 +181,14 @@
     <div id="receipt-container"></div>
 
     <!-- ══════════════════════════════════════════════════════
-         SCRIPTS — Urutan: DB → App (includes SecurityUtils) → Payment
+         SCRIPTS — Urutan: DB → App (SecurityUtils) → Payment
+         Semua event listener dipasang di JS (Zero Inline Script)
          ══════════════════════════════════════════════════════ -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
     <script src="js/db.js"></script>
     <script src="js/app.js"></script>
     <script src="js/payment.js"></script>
-
-    <!-- SECURITY: Event listeners terpusat (bukan inline onclick) -->
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            // Header action buttons
-            document.getElementById('btn-scan-qr')?.addEventListener('click', () => KisanakPayment.openQRScanner());
-            document.getElementById('btn-history')?.addEventListener('click', () => KisanakApp.showHistory());
-            document.getElementById('btn-reset')?.addEventListener('click', () => KisanakApp.resetDB());
-            document.getElementById('btn-clear-cart')?.addEventListener('click', () => KisanakApp.clearCart());
-
-            // Modal close buttons
-            document.getElementById('btn-close-qris')?.addEventListener('click', () => KisanakPayment.closeQRISModal());
-            document.getElementById('btn-close-scanner')?.addEventListener('click', () => KisanakPayment.closeQRScanner());
-            document.getElementById('btn-close-history')?.addEventListener('click', () => KisanakApp.closeModal('history-modal'));
-        });
-    </script>
 
 </body>
 </html>

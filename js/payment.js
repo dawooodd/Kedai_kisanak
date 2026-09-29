@@ -22,7 +22,7 @@ const KisanakPayment = (() => {
     ]);
 
     // ─── Tampilkan Modal QRIS ───────────────────────────────
-    function showQRISModal(total, orderNumber, cartItems, paymentMethod) {
+    function showQRISModal(total, orderNumber, cartItems, paymentMethod, customerName = '', orderNotes = '') {
         const modal = document.getElementById('qris-modal');
         const qrisAmount = document.getElementById('qris-amount');
         const qrisOrderNum = document.getElementById('qris-order-num');
@@ -30,7 +30,7 @@ const KisanakPayment = (() => {
 
         // SECURITY: Validasi total adalah angka positif
         if (typeof total !== 'number' || total <= 0) {
-            console.error('Total pembayaran tidak valid');
+            console.error('[SECURITY] Total pembayaran tidak valid');
             return;
         }
 
@@ -47,7 +47,7 @@ const KisanakPayment = (() => {
             modal.classList.remove('active');
             showPaymentNotification(total, randomName);
             playChimeSound();
-            KisanakApp.completeOrder(orderNumber, total, paymentMethod);
+            KisanakApp.completeOrder(orderNumber, total, paymentMethod, customerName, orderNotes);
         }, randomDelay);
     }
 
@@ -215,6 +215,8 @@ const KisanakPayment = (() => {
         // SECURITY: Semua data di-sanitize
         const safeOrderNum = SecurityUtils.sanitize(data.orderNumber);
         const safePayment = SecurityUtils.sanitize(data.paymentMethod);
+        const safeCustomer = SecurityUtils.sanitize(data.customerName || 'Walk-in Customer');
+        const safeNotes = SecurityUtils.sanitize(data.orderNotes || '-');
         const safeDateStr = SecurityUtils.sanitize(dateStr);
         const safeTimeStr = SecurityUtils.sanitize(timeStr);
 
@@ -235,6 +237,8 @@ const KisanakPayment = (() => {
             </div>
             <div style="font-size:11px;margin-bottom:8px;">
                 <div style="display:flex;justify-content:space-between;"><span>Order:</span><span>${safeOrderNum}</span></div>
+                <div style="display:flex;justify-content:space-between;"><span>Pelanggan:</span><span>${safeCustomer}</span></div>
+                <div style="display:flex;justify-content:space-between;"><span>Catatan:</span><span>${safeNotes}</span></div>
                 <div style="display:flex;justify-content:space-between;"><span>Tanggal:</span><span>${safeDateStr}</span></div>
                 <div style="display:flex;justify-content:space-between;"><span>Waktu:</span><span>${safeTimeStr}</span></div>
                 <div style="display:flex;justify-content:space-between;"><span>Bayar:</span><span>${safePayment}</span></div>
