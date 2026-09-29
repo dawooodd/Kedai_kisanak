@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Kedai Kisanak - Sistem POS Kedai Kopi Modern. Specialty coffee &amp; pastry since 2016.">
+
+    <!-- ══════════════════════════════════════════════════════
+         SECURITY: Content Security Policy (CSP)
+         ══════════════════════════════════════════════════════
+         Kebijakan keamanan konten yang KETAT:
+         - default-src 'self': Hanya izinkan resource dari domain sendiri
+         - script-src: Izinkan CDN SweetAlert2 dan html5-qrcode
+         - style-src: Izinkan CDN SweetAlert2 CSS dan Google Fonts
+         - font-src: Izinkan Google Fonts
+         - img-src: Izinkan gambar lokal, data URI, dan QR generator API
+         - connect-src: Izinkan API ipify untuk deteksi IP
+         - media-src 'self': Hanya audio lokal
+         - object-src 'none': Blokir plugin (Flash, Java, dll)
+         - base-uri 'self': Cegah base tag injection
+         - form-action 'self': Cegah form submission ke domain lain
+         - frame-ancestors 'none': Cegah clickjacking via iframe
+         ══════════════════════════════════════════════════════ -->
+    <meta http-equiv="Content-Security-Policy" content="
+        default-src 'self';
+        script-src 'self' https://cdn.jsdelivr.net https://unpkg.com;
+        style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com;
+        font-src 'self' https://fonts.gstatic.com;
+        img-src 'self' data: https://api.qrserver.com;
+        connect-src 'self' https://api.ipify.org;
+        media-src 'self';
+        object-src 'none';
+        base-uri 'self';
+        form-action 'self';
+        frame-ancestors 'none';
+    ">
+
+    <!-- SECURITY: Mencegah MIME-type sniffing -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff">
+
+    <!-- SECURITY: Mencegah clickjacking -->
+    <meta http-equiv="X-Frame-Options" content="DENY">
+
+    <!-- SECURITY: Kontrol referrer information -->
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+
+    <title>Kedai Kisanak — Point of Sale</title>
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/jpeg" href="gambar/logo_kisanak.jpg">
+
+    <!-- Stylesheet Utama -->
+    <link rel="stylesheet" href="css/style.css">
+
+    <!-- CDN: SweetAlert2 CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
+</head>
+<body>
+
+    <!-- ══════════════════════════════════════════════════════
+         HEADER — Logo, IP Address, Jam, dan Aksi Cepat
+         ══════════════════════════════════════════════════════ -->
+    <header class="header">
+        <div class="header-brand">
+            <img src="gambar/logo_kisanak.jpg" alt="Logo Kedai Kisanak" class="logo">
+            <div class="header-ip" id="header-ip">
+                <span class="ip-label">Terminal IP</span>
+                <span class="ip-value" id="ip-value">Memuat...</span>
+            </div>
+        </div>
+
+        <div class="header-actions">
+            <span class="header-clock" id="header-clock">Memuat...</span>
+            <!-- SECURITY: Tidak ada inline onclick — event listener dipasang di JS -->
+            <button class="btn-icon" id="btn-scan-qr" title="Scan QR Code">📷</button>
+            <button class="btn-icon" id="btn-history" title="Riwayat Transaksi">📋</button>
+            <button class="btn-icon" id="btn-reset" title="Reset Database">🔄</button>
+        </div>
+    </header>
+
+    <!-- ══════════════════════════════════════════════════════
+         MAIN CONTAINER — Layout 3 kolom
+         ══════════════════════════════════════════════════════ -->
+    <div class="main-container">
+
+        <!-- SIDEBAR: Filter Kategori (diisi dinamis oleh app.js) -->
+        <aside class="sidebar" id="sidebar"></aside>
+
+        <!-- AREA MENU: Katalog Produk -->
+        <main class="menu-section">
+            <div class="menu-header">
+                <h2 id="menu-title">Semua Menu</h2>
+                <span class="item-count" id="item-count">0 item</span>
+            </div>
+            <div class="search-bar">
+                <span class="search-icon">🔍</span>
+                <input type="text" id="search-input" 
+                       placeholder="Cari menu kopi, pastry..." 
+                       autocomplete="off"
+                       maxlength="100">
+            </div>
+            <div class="menu-grid" id="menu-grid"></div>
+        </main>
+
+        <!-- PANEL ORDER: Keranjang Belanja -->
+        <aside class="order-panel">
+            <div class="panel-header">
+                <h3>🛒 Pesanan</h3>
+                <button class="btn-clear" id="btn-clear-cart">Kosongkan</button>
+            </div>
+            <div class="order-items-container" id="order-items-container"></div>
+            <div class="order-footer" id="order-footer"></div>
+        </aside>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════
+         MODALS
+         ══════════════════════════════════════════════════════ -->
+
+    <!-- MODAL: QRIS -->
+    <div class="modal-overlay" id="qris-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>📱 Pembayaran QRIS</h3>
+                <button class="modal-close" id="btn-close-qris">✕</button>
+            </div>
+            <div class="qris-content">
+                <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:8px;" id="qris-order-num"></p>
+                <p class="qris-amount" id="qris-amount">Rp 0</p>
+                <div class="qris-image-wrapper">
+                    <img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&amp;data=KISANAK-QRIS-PAYMENT-DUMMY&amp;color=2C1810" 
+                         alt="QRIS Code" id="qris-image">
+                </div>
+                <div class="qris-waiting">
+                    <div class="spinner"></div>
+                    <span>Menunggu pembayaran masuk...</span>
+                </div>
+                <p style="font-size:0.75rem;color:var(--text-muted);margin-top:16px;">
+                    Scan QR code di atas menggunakan aplikasi e-wallet Anda
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: QR Scanner -->
+    <div class="modal-overlay" id="scanner-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>📷 Scan QR Code</h3>
+                <button class="modal-close" id="btn-close-scanner">✕</button>
+            </div>
+            <div class="scanner-content">
+                <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:16px;">
+                    Arahkan kamera ke QR Code untuk scan voucher atau kartu loyalty
+                </p>
+                <div id="qr-reader"></div>
+                <div class="scanner-result" id="scanner-result"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Riwayat Transaksi -->
+    <div class="modal-overlay" id="history-modal">
+        <div class="modal-content" style="max-width:560px;">
+            <div class="modal-header">
+                <h3>📋 Riwayat Transaksi</h3>
+                <button class="modal-close" id="btn-close-history">✕</button>
+            </div>
+            <div class="history-list" id="history-list"></div>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Receipt Container (tersembunyi, untuk cetak) -->
+    <div id="receipt-container"></div>
+
+    <!-- ══════════════════════════════════════════════════════
+         SCRIPTS — Urutan: DB → App (includes SecurityUtils) → Payment
+         ══════════════════════════════════════════════════════ -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script src="js/db.js"></script>
+    <script src="js/app.js"></script>
+    <script src="js/payment.js"></script>
+
+    <!-- SECURITY: Event listeners terpusat (bukan inline onclick) -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Header action buttons
+            document.getElementById('btn-scan-qr')?.addEventListener('click', () => KisanakPayment.openQRScanner());
+            document.getElementById('btn-history')?.addEventListener('click', () => KisanakApp.showHistory());
+            document.getElementById('btn-reset')?.addEventListener('click', () => KisanakApp.resetDB());
+            document.getElementById('btn-clear-cart')?.addEventListener('click', () => KisanakApp.clearCart());
+
+            // Modal close buttons
+            document.getElementById('btn-close-qris')?.addEventListener('click', () => KisanakPayment.closeQRISModal());
+            document.getElementById('btn-close-scanner')?.addEventListener('click', () => KisanakPayment.closeQRScanner());
+            document.getElementById('btn-close-history')?.addEventListener('click', () => KisanakApp.closeModal('history-modal'));
+        });
+    </script>
+
+</body>
+</html>
