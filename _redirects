@@ -1,0 +1,3 @@
+# Netlify SPA Fallback Routing
+# Memastikan refresh halaman tidak menyebabkan error 404
+/*    /index.html   200
