@@ -45,9 +45,8 @@ async function bootstrapApp() {
         // 5. Setup Seluruh Event Listener DOM Terpusat
         setupEventListeners();
 
-        // 6. Jalankan Jam & Deteksi IP Terminal
+        // 6. Jalankan Jam Operasional Kasir
         startLiveClock();
-        fetchTerminalIP();
 
         console.log('✅ Kedai Kisanak POS siap melayani pesanan.');
     } catch (criticalError) {
@@ -326,26 +325,6 @@ function startLiveClock() {
     setInterval(tick, 1000);
 }
 
-/**
- * Deteksi Terminal IP
- */
-function fetchTerminalIP() {
-    const ipEl = document.getElementById('ip-value');
-    if (!ipEl) return;
-
-    fetch('https://api.ipify.org?format=json')
-        .then(res => res.json())
-        .then(data => {
-            if (data.ip && /^[\d.]+$/.test(data.ip)) {
-                ipEl.textContent = data.ip;
-            } else {
-                ipEl.textContent = '127.0.0.1';
-            }
-        })
-        .catch(() => {
-            ipEl.textContent = '192.168.1.1';
-        });
-}
 
 // Inisialisasi saat DOM siap
 if (document.readyState === 'loading') {

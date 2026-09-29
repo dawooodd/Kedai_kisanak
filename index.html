@@ -14,13 +14,13 @@
          - style-src 'self' 'unsafe-inline' CDN: Style lokal & Google Fonts
          - font-src 'self' Google Fonts
          - img-src 'self' data: QRServer (QR code generator)
-         - connect-src 'self' ipify (terminal IP lookup)
+         - connect-src 'self' (local origin only)
          - media-src 'self'
          - object-src 'none': Blokir flash/java/plugins
          - base-uri 'self': Cegah base tag hijack
          - form-action 'self': Cegah form redirection hijack
          ══════════════════════════════════════════════════════ -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://api.qrserver.com; connect-src 'self' https://api.ipify.org; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://api.qrserver.com; connect-src 'self'; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';">
 
     <!-- SECURITY: Mencegah MIME-type sniffing -->
     <meta http-equiv="X-Content-Type-Options" content="nosniff">
@@ -31,10 +31,10 @@
     <!-- SECURITY: Kontrol referrer information -->
     <meta name="referrer" content="strict-origin-when-cross-origin">
 
-    <title>Kedai Kisanak — Point of Sale</title>
+    <title>Kedai Kisanak — Specialty Coffee &amp; POS</title>
 
     <!-- Favicon -->
-    <link rel="icon" type="image/jpeg" href="./gambar/logo_kisanak.jpg">
+    <link rel="icon" type="image/jpeg" href="./gambar/logo_kisanak_modern.jpg">
 
     <!-- Stylesheet Utama -->
     <link rel="stylesheet" href="./css/style.css">
@@ -45,23 +45,48 @@
 <body>
 
     <!-- ══════════════════════════════════════════════════════
-         HEADER — Logo, IP Address, Jam, dan Aksi Cepat
+         HEADER — Brand Logo, Identitas Kedai, Jam, & Aksi Kasir
          ══════════════════════════════════════════════════════ -->
     <header class="header">
         <div class="header-brand">
-            <img src="./gambar/logo_kisanak.jpg" alt="Logo Kedai Kisanak" class="logo">
-            <div class="header-ip" id="header-ip">
-                <span class="ip-label">Terminal IP</span>
-                <span class="ip-value" id="ip-value">Memuat...</span>
+            <div class="logo-wrapper">
+                <img src="./gambar/logo_kisanak_modern.jpg" alt="Logo Kedai Kisanak" class="logo"
+                     onerror="this.src='./gambar/logo_kisanak.jpg'">
+            </div>
+            <div class="brand-info">
+                <div class="brand-title-row">
+                    <h1 class="brand-name">Kedai Kisanak</h1>
+                    <span class="brand-badge">EST. 2016</span>
+                </div>
+                <div class="brand-meta-row">
+                    <span class="brand-tagline">Specialty Coffee &amp; Roastery</span>
+                    <span class="brand-status-divider">•</span>
+                    <span class="status-indicator">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Kasir Siap</span>
+                    </span>
+                </div>
             </div>
         </div>
 
         <div class="header-actions">
-            <span class="header-clock" id="header-clock">Memuat...</span>
-            <!-- SECURITY: Tidak ada inline onclick — event listener dipasang di js/app.js -->
-            <button class="btn-icon" id="btn-scan-qr" title="Scan QR Code">📷</button>
-            <button class="btn-icon" id="btn-history" title="Riwayat Transaksi">📋</button>
-            <button class="btn-icon" id="btn-reset" title="Reset Database">🔄</button>
+            <div class="header-clock-wrapper">
+                <span class="clock-icon">🕒</span>
+                <span class="header-clock" id="header-clock">Memuat...</span>
+            </div>
+            <!-- Tombol aksi kasir dengan visual icon dan label rapi -->
+            <button class="btn-action-kasir" id="btn-scan-qr" title="Scan QR Voucher / Meja" aria-label="Scan QR Code">
+                <span class="btn-icon-symbol">📷</span>
+                <span class="btn-label-text">Scan QR</span>
+            </button>
+            <button class="btn-action-kasir" id="btn-history" title="Riwayat Transaksi Penjualan" aria-label="Riwayat Transaksi">
+                <span class="btn-icon-symbol">📋</span>
+                <span class="btn-label-text">Riwayat</span>
+            </button>
+            <button class="btn-action-kasir btn-action-muted" id="btn-reset" title="Reset Database Produk &amp; Transaksi" aria-label="Reset Data">
+                <span class="btn-icon-symbol">🔄</span>
+                <span class="btn-label-text">Reset</span>
+            </button>
         </div>
     </header>
 

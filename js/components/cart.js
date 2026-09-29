@@ -115,6 +115,15 @@ export async function changeQuantity(productId, delta) {
 }
 
 /**
+ * Menghapus 1 produk secara langsung dari keranjang
+ * @param {string} productId
+ */
+export function removeItem(productId) {
+    cart = cart.filter(i => i.id !== productId);
+    notifyCartUpdate();
+}
+
+/**
  * Mengosongkan keranjang belanja
  */
 export function clearCart() {
@@ -213,19 +222,20 @@ export function renderOrderPanel() {
         const subtotal = canonical.price * item.quantity;
 
         return `
-            <div class="order-item">
+            <div class="order-item" id="order-item-${safeId}">
                 <img src="${safeImage}" alt="${safeName}" class="item-image"
                      onerror="this.style.display='none'">
                 <div class="item-info">
-                    <h4>${safeName}</h4>
+                    <h4 class="item-name">${safeName}</h4>
                     <span class="item-price">Rp ${formatNumber(canonical.price)}</span>
                 </div>
                 <div class="qty-controls">
-                    <button data-qty-id="${safeId}" data-qty-delta="-1" aria-label="Kurangi">−</button>
+                    <button class="btn-qty-minus" data-qty-id="${safeId}" data-qty-delta="-1" aria-label="Kurangi ${safeName}">−</button>
                     <span class="qty-value">${item.quantity}</span>
-                    <button data-qty-id="${safeId}" data-qty-delta="1" aria-label="Tambah">+</button>
+                    <button class="btn-qty-plus" data-qty-id="${safeId}" data-qty-delta="1" aria-label="Tambah ${safeName}">+</button>
                 </div>
                 <span class="item-subtotal">Rp ${formatNumber(subtotal)}</span>
+                <button class="btn-remove-item" data-remove-id="${safeId}" title="Hapus ${safeName} dari pesanan" aria-label="Hapus item">✕</button>
             </div>
         `;
     }).join('');
@@ -238,6 +248,14 @@ export function renderOrderPanel() {
             const id = btn.dataset.qtyId;
             const delta = parseInt(btn.dataset.qtyDelta, 10);
             if (id && !isNaN(delta)) changeQuantity(id, delta);
+        });
+    });
+
+    // Event delegation untuk tombol hapus cepat item
+    container.querySelectorAll('[data-remove-id]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const id = btn.dataset.removeId;
+            if (id) removeItem(id);
         });
     });
 
