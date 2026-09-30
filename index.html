@@ -13,14 +13,14 @@
          - script-src 'self' CDN: SweetAlert2 & html5-qrcode (ZERO inline script)
          - style-src 'self' 'unsafe-inline' CDN: Style lokal & Google Fonts
          - font-src 'self' Google Fonts
-         - img-src 'self' data: QRServer (QR code generator)
+         - img-src 'self' data: (local assets and data URI)
          - connect-src 'self' (local origin only)
          - media-src 'self'
          - object-src 'none': Blokir flash/java/plugins
          - base-uri 'self': Cegah base tag hijack
          - form-action 'self': Cegah form redirection hijack
          ══════════════════════════════════════════════════════ -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://api.qrserver.com; connect-src 'self'; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';">
 
     <!-- SECURITY: Mencegah MIME-type sniffing -->
     <meta http-equiv="X-Content-Type-Options" content="nosniff">
@@ -157,7 +157,7 @@
                 <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:8px;" id="qris-order-num"></p>
                 <p class="qris-amount" id="qris-amount">Rp 0</p>
                 <div class="qris-image-wrapper">
-                    <img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&amp;data=KISANAK-QRIS-PAYMENT-DUMMY&amp;color=2C1810" 
+                    <img src="./gambar/qris_code.svg" 
                          alt="QRIS Code" id="qris-image">
                 </div>
                 <div class="qris-waiting">

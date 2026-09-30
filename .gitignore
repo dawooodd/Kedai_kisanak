@@ -1,5 +1,133 @@
-# Object file
-*.o
+# ============================================================
+# .gitignore — Kedai Kisanak POS Security & Hygiene Filter
+# ============================================================
+# Aturan ketat untuk mencegah kebocoran file sensitif, kredensial
+# API, environment variables, database lokal, cache, dan logs.
+# ============================================================
 
-# Ada Library Information
+# ─── 1. Environment & Sensitive Configs ─────────────────────
+.env
+.env.*
+*.env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+.env.staging
+
+# ─── 2. API Keys, Tokens & Private Credentials ──────────────
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+*credentials*.json
+*client_secret*.json
+*service-account*.json
+*firebase-adminsdk*.json
+*api_key*
+*apikey*
+secrets.*
+secrets/
+*.secret
+*.secrets
+.secret*
+
+# ─── 3. Netlify Local & Deployment Artifacts ────────────────
+.netlify/
+.netlify
+netlify-*.json
+
+# ─── 4. Node & Package Managers ─────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.pnpm-store/
+.npm/
+.yarn/
+package-lock.json.bak
+
+# ─── 5. Build, Cache & Temporary Directories ────────────────
+dist/
+build/
+out/
+.cache/
+.parcel-cache/
+.turbo/
+.temp/
+temp/
+tmp/
+*.tmp
+
+# ─── 6. Local Databases & Dumps ─────────────────────────────
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.dump
+*.sql
+*.backup
+*.bak
+
+# ─── 7. Application Logs & Crash Reports ────────────────────
+*.log
+logs/
+*.pid
+*.seed
+*.crash
+
+# ─── 8. Operating System Junk ───────────────────────────────
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.directory
+
+# ─── 9. IDE, Editors & Development Tools ────────────────────
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.sublime-project
+*.sublime-workspace
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
+.project
+.settings/
+.buildpath
+
+# ─── 10. Compiled Binaries & Object Files ───────────────────
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
 *.ali
